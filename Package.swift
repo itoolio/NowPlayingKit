@@ -4,22 +4,22 @@
 import PackageDescription
 
 let package = Package(
-    name: "NowPlayingKit",
+	name: "NowPlayingKit",
 	platforms: [
 		.iOS(.v17),
 		.macOS(.v14),
 	],
-    products: [
-        .library(
-            name: "NowPlayingKit",
-            targets: ["NowPlayingKit"]),
-    ],
-    targets: [
-        .target(
-            name: "NowPlayingKit"),
-        .testTarget(
-            name: "NowPlayingKitTests",
-            dependencies: ["NowPlayingKit"]
-        ),
-    ]
+	products: [
+		.library(
+			name: "NowPlayingKit",
+			targets: ["NowPlayingKit"])
+	],
+	targets: [
+		.target(
+			name: "NowPlayingKit"),
+		.testTarget(
+			name: "NowPlayingKitTests",
+			dependencies: ["NowPlayingKit"]
+		),
+	]
 )
