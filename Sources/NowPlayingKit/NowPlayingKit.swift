@@ -46,168 +46,40 @@ public struct NowPlayingData: Sendable {
 
 public final class NowPlayingManager: @unchecked Sendable {
     public static let shared = NowPlayingManager()
-
+    
     #if os(iOS)
-        private let player = SystemMusicPlayer.shared
+    private let player = SystemMusicPlayer.shared
+    private var stateObservation: NSKeyValueObservation?
     #endif
 
     @Published public private(set) var isPlaying = false
-    
-    // Observation-related properties
-    private var playerObserver: NSKeyValueObservation?
-    private var nowPlayingObserver: NSKeyValueObservation?
-    private var remoteCommandObservers: [Any] = []
-    private var notificationObservers: [NSObjectProtocol] = []
-    
-    // Publisher for immediate state changes
-    private let playbackStateSubject = PassthroughSubject<Bool, Never>()
-    public var playbackStatePublisher: AnyPublisher<Bool, Never> {
-        playbackStateSubject.eraseToAnyPublisher()
-    }
 
     private init() {
         #if os(iOS)
-            self.isPlaying = player.state.playbackStatus == .playing
-            setupPlaybackObservers()
-        #endif
-    }
-    
-    private func setupPlaybackObservers() {
-        #if os(iOS)
-            // 1. MusicKit queue observation 
-            Task {
-                print("🎵 Initial playback state: \(self.isPlaying)")
-                for await _ in player.queue.objectWillChange.values {
-                    await MainActor.run {
-                        self.checkAndUpdatePlaybackState()
+        self.isPlaying = player.state.playbackStatus == .playing
+
+        stateObservation = player.observe(\.state, options: [.new]) { [weak self] player, _ in
+            guard let self = self else { return }
+            let newState = player.state.playbackStatus == .playing
+            if self.isPlaying != newState {
+                print("🎵 Playback state updating: \(self.isPlaying) -> \(newState)")
+                DispatchQueue.main.async {
+                    self.isPlaying = newState
+                }
+            }
+        }
+        
+        Task {
+            for await _ in player.queue.objectWillChange.values {
+                await MainActor.run {
+                    let newState = player.state.playbackStatus == .playing
+                    if self.isPlaying != newState {
+                        print("🎵 Playback state updating from queue change: \(self.isPlaying) -> \(newState)")
+                        self.isPlaying = newState
                     }
                 }
             }
-            
-            // 2. Direct KVO observation of player state
-            playerObserver = player.observe(\.state, options: [.new, .initial]) { [weak self] _, _ in
-                guard let self = self else { return }
-                self.checkAndUpdatePlaybackState()
-            }
-            
-            // 3. System notifications
-            setupNotificationObservers()
-            
-            // 4. Remote command center
-            setupRemoteCommandCenter()
-            
-            // 5. Now Playing Info Center observation
-            setupNowPlayingInfoMonitoring()
-            
-            // Initial publish of state
-            playbackStateSubject.send(isPlaying)
-        #endif
-    }
-    
-    private func setupNotificationObservers() {
-        #if os(iOS)
-            let notificationCenter = NotificationCenter.default
-            
-            // System notifications that could indicate playback state changes
-            let notifications: [Notification.Name] = [
-                SystemMusicPlayer.playbackStateDidChangeNotification,
-                UIApplication.didBecomeActiveNotification,
-                NSNotification.Name.MPMusicPlayerControllerPlaybackStateDidChange,
-                NSNotification.Name.MPMusicPlayerControllerNowPlayingItemDidChange,
-                AVAudioSession.interruptionNotification,
-                AVAudioSession.routeChangeNotification
-            ]
-            
-            for notification in notifications {
-                let observer = notificationCenter.addObserver(
-                    forName: notification,
-                    object: nil,
-                    queue: .main
-                ) { [weak self] _ in
-                    guard let self = self else { return }
-                    self.checkAndUpdatePlaybackState()
-                }
-                notificationObservers.append(observer)
-            }
-        #endif
-    }
-    
-    private func setupRemoteCommandCenter() {
-        #if os(iOS)
-            let commandCenter = MPRemoteCommandCenter.shared()
-            
-            // Play command
-            remoteCommandObservers.append(
-                commandCenter.playCommand.addTarget { [weak self] _ in
-                    self?.checkAndUpdatePlaybackState()
-                    return .success
-                }
-            )
-            
-            // Pause command
-            remoteCommandObservers.append(
-                commandCenter.pauseCommand.addTarget { [weak self] _ in
-                    self?.checkAndUpdatePlaybackState()
-                    return .success
-                }
-            )
-            
-            // Toggle play/pause command
-            remoteCommandObservers.append(
-                commandCenter.togglePlayPauseCommand.addTarget { [weak self] _ in
-                    self?.checkAndUpdatePlaybackState()
-                    return .success
-                }
-            )
-            
-            // Next track
-            remoteCommandObservers.append(
-                commandCenter.nextTrackCommand.addTarget { [weak self] _ in
-                    self?.checkAndUpdatePlaybackState()
-                    return .success
-                }
-            )
-            
-            // Previous track
-            remoteCommandObservers.append(
-                commandCenter.previousTrackCommand.addTarget { [weak self] _ in
-                    self?.checkAndUpdatePlaybackState()
-                    return .success
-                }
-            )
-        #endif
-    }
-    
-    private func setupNowPlayingInfoMonitoring() {
-        #if os(iOS)
-            // Monitor Now Playing Info Center changes with KVO since it doesn't have notifications
-            let infoCenter = MPNowPlayingInfoCenter.default()
-            nowPlayingObserver = infoCenter.observe(\.nowPlayingInfo, options: [.new]) { [weak self] _, _ in
-                self?.checkAndUpdatePlaybackState()
-            }
-        #endif
-    }
-    
-    // Consolidated method to check and update playback state
-    private func checkAndUpdatePlaybackState() {
-        #if os(iOS)
-            DispatchQueue.main.async {
-                let currentState = self.player.state.playbackStatus == .playing
-                if self.isPlaying != currentState {
-                    print("⚡ Playback state change detected: \(self.isPlaying) -> \(currentState)")
-                    self.isPlaying = currentState
-                    
-                    // Emit through the publisher for immediate updates
-                    self.playbackStateSubject.send(currentState)
-                    
-                    // Post notification to ensure all observers are updated
-                    NotificationCenter.default.post(
-                        name: SystemMusicPlayer.playbackStateDidChangeNotification,
-                        object: nil,
-                        userInfo: ["isPlaying": currentState]
-                    )
-                }
-            }
+        }
         #endif
     }
     
@@ -272,31 +144,12 @@ public final class NowPlayingManager: @unchecked Sendable {
     }
     
     deinit {
-        // Clean up observers
-        playerObserver?.invalidate()
-        nowPlayingObserver?.invalidate()
-        
-        // Remote command center observers
-        for observer in remoteCommandObservers {
-            if let token = observer as? Any {
-                MPRemoteCommandCenter.shared().playCommand.removeTarget(token)
-                MPRemoteCommandCenter.shared().pauseCommand.removeTarget(token)
-                MPRemoteCommandCenter.shared().togglePlayPauseCommand.removeTarget(token)
-                MPRemoteCommandCenter.shared().nextTrackCommand.removeTarget(token)
-                MPRemoteCommandCenter.shared().previousTrackCommand.removeTarget(token)
-            }
-        }
-        
-        // Notification observers
-        for observer in notificationObservers {
-            NotificationCenter.default.removeObserver(observer)
-        }
-        
-        NotificationCenter.default.removeObserver(self)
+        #if os(iOS)
+        stateObservation?.invalidate()
+        #endif
     }
 }
 
-// Notification name extensions
 extension SystemMusicPlayer {
     public static let playbackStateDidChangeNotification = NSNotification.Name("SystemMusicPlayerPlaybackStateDidChange")
 }
