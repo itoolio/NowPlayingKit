@@ -49,22 +49,30 @@ public final class NowPlayingManager: @unchecked Sendable {
     
     #if os(iOS)
     private let player = SystemMusicPlayer.shared
-    private var stateObservation: NSKeyValueObservation?
     #endif
 
     @Published public private(set) var isPlaying = false
+    
+    // Publisher for immediate state changes
+    private let playbackStateSubject = PassthroughSubject<Bool, Never>()
+    public var playbackStatePublisher: AnyPublisher<Bool, Never> {
+        playbackStateSubject.eraseToAnyPublisher()
+    }
 
     private init() {
         #if os(iOS)
+        // Set initial state
         self.isPlaying = player.state.playbackStatus == .playing
-
-        stateObservation = player.observe(\.state, options: [.new]) { [weak self] player, _ in
-            guard let self = self else { return }
-            let newState = player.state.playbackStatus == .playing
-            if self.isPlaying != newState {
-                print("🎵 Playback state updating: \(self.isPlaying) -> \(newState)")
-                DispatchQueue.main.async {
-                    self.isPlaying = newState
+        
+        // Emit initial state through publisher
+        playbackStateSubject.send(isPlaying)
+        
+        // Use Combine publisher for state changes
+        Task {
+            // Monitor both state and queue changes
+            for await _ in player.state.objectWillChange.values {
+                await MainActor.run {
+                    checkAndUpdatePlaybackState()
                 }
             }
         }
@@ -72,13 +80,46 @@ public final class NowPlayingManager: @unchecked Sendable {
         Task {
             for await _ in player.queue.objectWillChange.values {
                 await MainActor.run {
-                    let newState = player.state.playbackStatus == .playing
-                    if self.isPlaying != newState {
-                        print("🎵 Playback state updating from queue change: \(self.isPlaying) -> \(newState)")
-                        self.isPlaying = newState
-                    }
+                    checkAndUpdatePlaybackState()
                 }
             }
+        }
+        
+        // Setup notification observers for additional monitoring
+        setupNotificationObservers()
+        #endif
+    }
+    
+    #if os(iOS)
+    private func setupNotificationObservers() {
+        // Listen to system notifications that might indicate playback changes
+        let notificationCenter = NotificationCenter.default
+        let notifications: [Notification.Name] = [
+            UIApplication.didBecomeActiveNotification,
+            NSNotification.Name.MPMusicPlayerControllerPlaybackStateDidChange,
+            NSNotification.Name.MPMusicPlayerControllerNowPlayingItemDidChange
+        ]
+        
+        for notification in notifications {
+            notificationCenter.addObserver(
+                self,
+                selector: #selector(handlePlaybackStateChange),
+                name: notification,
+                object: nil
+            )
+        }
+    }
+    #endif
+    
+    private func checkAndUpdatePlaybackState() {
+        #if os(iOS)
+        let currentState = player.state.playbackStatus == .playing
+        if self.isPlaying != currentState {
+            print("🎵 Playback state updating: \(self.isPlaying) -> \(currentState)")
+            self.isPlaying = currentState
+            
+            // Emit through the publisher for immediate updates
+            playbackStateSubject.send(currentState)
         }
         #endif
     }
@@ -145,7 +186,7 @@ public final class NowPlayingManager: @unchecked Sendable {
     
     deinit {
         #if os(iOS)
-        stateObservation?.invalidate()
+        NotificationCenter.default.removeObserver(self)
         #endif
     }
 }
