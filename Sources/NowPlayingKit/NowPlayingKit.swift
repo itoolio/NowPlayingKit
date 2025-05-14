@@ -9,6 +9,39 @@ import Combine
 import Foundation
 import MusicKit
 
+public enum NowPlayingError: Error {
+	case noCurrentEntry
+	case unauthorized
+}
+
+public struct NowPlayingData: Sendable {
+	public let id: String
+	public let title: String
+	public let artist: String
+	public let album: String?
+	public let artworkURL: URL?
+	public let playbackTime: TimeInterval
+	public let duration: TimeInterval
+
+	public init(
+		id: String,
+		title: String,
+		artist: String,
+		album: String? = nil,
+		artworkURL: URL? = nil,
+		playbackTime: TimeInterval = 0,
+		duration: TimeInterval = 1
+	) {
+		self.id = id
+		self.title = title
+		self.artist = artist
+		self.album = album
+		self.artworkURL = artworkURL
+		self.playbackTime = playbackTime
+		self.duration = duration
+	}
+}
+
 public final class NowPlayingManager: @unchecked Sendable {
     public static let shared = NowPlayingManager()
 
